@@ -1,0 +1,154 @@
+{
+  "name": "Soporte Bot – MineCatalog",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "soporte",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook – Recibir pregunta",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "soporte-bot-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validar que el body tenga el campo 'question'\nconst body = $input.first().json.body || $input.first().json;\nconst question = (body.question || '').trim();\n\nif (!question) {\n  return [{\n    json: {\n      valid: false,\n      error: \"El campo 'question' es obligatorio y no puede estar vacío.\"\n    }\n  }];\n}\n\nreturn [{ json: { valid: true, question } }];"
+      },
+      "id": "node-validate",
+      "name": "Validar entrada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if",
+      "name": "¿Entrada válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:{{ $env.PYTHON_API_PORT || 8000 }}/ask",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"question\": \"{{ $('Validar entrada').item.json.question }}\"\n}",
+        "options": {
+          "timeout": 35000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-python-api",
+      "name": "Consultar Python API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Manejar respuesta de la Python API\nconst response = $input.first().json;\nconst statusCode = response.statusCode || 200;\nconst body = response.body || response;\n\nlet finalAnswer;\nlet found = false;\nlet sources = [];\n\nif (statusCode === 200 && body.answer) {\n  finalAnswer = body.answer;\n  found = body.found ?? true;\n  sources = body.sources || [];\n} else if (statusCode === 504) {\n  finalAnswer = \"El servicio de IA tardó demasiado. Por favor intenta nuevamente en unos momentos.\";\n} else if (statusCode === 429) {\n  finalAnswer = \"Límite de solicitudes alcanzado. Intenta en unos minutos.\";\n} else if (statusCode >= 500) {\n  finalAnswer = \"Ocurrió un error interno. Nuestro equipo fue notificado. Puedes escribir a soporte.minecatalog@empresa.com\";\n} else if (body.error) {\n  finalAnswer = `Error: ${body.error}`;\n} else {\n  finalAnswer = \"No se pudo procesar la solicitud. Intenta nuevamente.\";\n}\n\nreturn [{ json: { answer: finalAnswer, found, sources, statusCode } }];"
+      },
+      "id": "node-process-response",
+      "name": "Procesar respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"answer\": \"{{ $json.answer }}\",\n  \"found\": {{ $json.found }},\n  \"sources\": {{ JSON.stringify($json.sources) }}\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-respond-ok",
+      "name": "Responder al cliente",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"error\": \"{{ $('Validar entrada').item.json.error }}\",\n  \"answer\": \"{{ $('Validar entrada').item.json.error }}\"\n}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "node-respond-error",
+      "name": "Responder error validación",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 420]
+    }
+  ],
+  "connections": {
+    "Webhook – Recibir pregunta": {
+      "main": [
+        [{ "node": "Validar entrada", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validar entrada": {
+      "main": [
+        [{ "node": "¿Entrada válida?", "type": "main", "index": 0 }]
+      ]
+    },
+    "¿Entrada válida?": {
+      "main": [
+        [{ "node": "Consultar Python API", "type": "main", "index": 0 }],
+        [{ "node": "Responder error validación", "type": "main", "index": 0 }]
+      ]
+    },
+    "Consultar Python API": {
+      "main": [
+        [{ "node": "Procesar respuesta", "type": "main", "index": 0 }]
+      ]
+    },
+    "Procesar respuesta": {
+      "main": [
+        [{ "node": "Responder al cliente", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "versionId": "1"
+}
